@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import time
 from datetime import datetime
 
@@ -7,6 +8,9 @@ from core.navigation import go_home
 from core.permissions import check_access
 from crud.inventory import get_data, save_data
 from utils.formatters import get_model_rank
+=======
+from views.common import *
+>>>>>>> 88b8b5966418ed53f8a893e327b91727f9c01707
 
 
 def render_machine_edit():

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import time
 from datetime import datetime
 
@@ -9,6 +10,9 @@ from core.permissions import check_access
 from crud.inventory import get_data, save_data
 from crud.orders import get_orders, revert_to_inbound
 from utils.formatters import get_model_rank
+=======
+from views.common import *
+>>>>>>> 88b8b5966418ed53f8a893e327b91727f9c01707
 
 
 def render_ship_confirm():

@@ -1,4 +1,3 @@
-import ast
 import time
 
 import pandas as pd
@@ -11,7 +10,7 @@ from crud.inventory import get_data
 from crud.orders import create_sales_order, get_orders, save_orders
 from crud.planning import get_factory_plan, save_factory_plan
 from utils.formatters import get_model_rank
-from utils.parsers import parse_requirements
+from utils.parsers import parse_alloc_dict, parse_requirements
 
 
 def render_sales_create():
@@ -363,35 +362,17 @@ def render_sales_create():
                         
                         # 2. 合并 Source Batch (Plan String)
                         # 必须解析 -> 合并 -> 序列化，防止覆盖
-                        merged_plan_map = {} # {Model: {Batch: Qty}}
+                        merged_plan_map = {}
                         
                         for idx, row in all_target_rows.iterrows():
-                            p_str = str(row.get('指定批次/来源', ''))
-                            if not p_str: continue
-                            
-                            # 解析单个 plan string (e.g. "ModelA:{...}; ModelB:{...}")
-                            parts = p_str.split(";")
-                            for part in parts:
-                                if ":" in part:
-                                    try:
-                                        m_key, content = part.split(":", 1)
-                                        m_key = m_key.strip()
-                                        alloc_dict = ast.literal_eval(content.strip())
-                                        
-                                        if m_key not in merged_plan_map:
-                                            merged_plan_map[m_key] = {}
-                                        
-                                        # Merge alloc_dict
-                                        for batch, qty in alloc_dict.items():
-                                            merged_plan_map[m_key][batch] = merged_plan_map[m_key].get(batch, 0) + int(qty)
-                                    except: pass
-                        
-                        # 序列化
-                        all_plans_final = []
-                        for m_key, alloc_data in merged_plan_map.items():
-                            all_plans_final.append(f"{m_key}:{str(alloc_data)}")
-                            
-                        combined_plan_str = "; ".join(all_plans_final)
+                            m_key = str(row.get('机型', '')).strip()
+                            alloc_dict = parse_alloc_dict(row.get('指定批次/来源', {}))
+                            if not m_key or not alloc_dict:
+                                continue
+                            if m_key not in merged_plan_map:
+                                merged_plan_map[m_key] = {}
+                            for batch, qty in alloc_dict.items():
+                                merged_plan_map[m_key][batch] = merged_plan_map[m_key].get(batch, 0) + int(qty)
                         
                         # 3. 创建订单
                         new_oid = create_sales_order(
@@ -401,7 +382,7 @@ def render_sales_create():
                             note=new_note,
                             pack_option=pack_opt,
                             delivery_time=new_delivery,
-                            source_batch=combined_plan_str
+                            source_batch=merged_plan_map
                         )
                         
                         # 4. 更新所有合同状态

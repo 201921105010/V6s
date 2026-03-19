@@ -1,4 +1,3 @@
-import ast
 import time
 from datetime import datetime
 
@@ -13,7 +12,7 @@ from crud.inventory import get_data
 from crud.orders import create_sales_order, get_orders, save_orders
 from crud.planning import get_factory_plan, save_factory_plan, save_planning_record
 from utils.formatters import get_model_rank
-from utils.parsers import parse_requirements
+from utils.parsers import parse_alloc_dict, parse_plan_map, parse_requirements, to_json_text
 
 
 def render_boss_planning():
@@ -479,7 +478,7 @@ def render_boss_planning():
                         # --- V7.7 Add File Preview (Collapsed) ---
                         render_file_manager(sel_id, first_row['客户名'], default_expanded=False, key_suffix="_plan")
 
-                        changes_map = {} # {idx: new_plan_str}
+                        changes_map = {}
                         
                         for idx, row in target_rows.iterrows():
                             model = row['机型']
@@ -496,14 +495,7 @@ def render_boss_planning():
                                 st.info(f"📝 **备注:** {remark}")
                             
                             # 解析旧配置
-                            saved_plan_str = str(row.get('指定批次/来源', ''))
-                            prev_alloc = {}
-                            try:
-                                 if ":" in saved_plan_str and not saved_plan_str.strip().startswith("{"):
-                                     prev_alloc = ast.literal_eval(saved_plan_str.split(":", 1)[1])
-                                 else:
-                                     prev_alloc = ast.literal_eval(saved_plan_str)
-                            except: pass
+                            prev_alloc = parse_alloc_dict(row.get('指定批次/来源', {}))
                             
                             # --- 新增：显示实际配货进度 (Actual Allocation) ---
                             actual_alloc_info = ""
@@ -540,8 +532,7 @@ def render_boss_planning():
                                         else: new_alloc[b] = c
                                     
                                     # 1. 更新当前行的 '指定批次/来源'
-                                    new_plan_str = f"{model}:{str(new_alloc)}"
-                                    fp_df.loc[idx, '指定批次/来源'] = new_plan_str
+                                    fp_df.loc[idx, '指定批次/来源'] = new_alloc
                                     save_factory_plan(fp_df)
                                     
                                     # 2. 如果关联了订单，同步更新 Sales Order
@@ -554,14 +545,15 @@ def render_boss_planning():
                                         
                                         # 获取该合同所有相关行（最新状态）
                                         related_rows = fp_df[fp_df['合同号'] == sel_id]
-                                        all_plans_sync = []
+                                        all_plans_sync = {}
                                         for _, r_sync in related_rows.iterrows():
-                                            all_plans_sync.append(str(r_sync.get('指定批次/来源', '')))
-                                        
-                                        combined_plan_sync = "; ".join(all_plans_sync)
+                                            model_sync = str(r_sync.get('机型', '')).strip()
+                                            alloc_sync = parse_alloc_dict(r_sync.get('指定批次/来源', {}))
+                                            if model_sync and alloc_sync:
+                                                all_plans_sync[model_sync] = alloc_sync
                                         
                                         if oid_now in orders_df['订单号'].values:
-                                            orders_df.loc[orders_df['订单号'] == oid_now, '指定批次/来源'] = combined_plan_sync
+                                            orders_df.loc[orders_df['订单号'] == oid_now, '指定批次/来源'] = [all_plans_sync]
                                             save_orders(orders_df)
                                     
                                     st.success("已同步实际配货数据！"); time.sleep(0.5); st.rerun()
@@ -639,22 +631,17 @@ def render_boss_planning():
                             if alloc_spot > 0: this_plan['现货(Spot)'] = alloc_spot
                             this_plan.update(current_batch_alloc)
                             
-                            final_str = f"{model}:{str(this_plan)}"
-                            changes_map[idx] = final_str
+                            changes_map[idx] = this_plan
                             st.divider()
 
                         if st.button("💾 保存规划 (Save Plan)", type="primary"):
-                            for idx, plan_str in changes_map.items():
-                                fp_df.loc[idx, '指定批次/来源'] = plan_str
+                            for idx, plan_obj in changes_map.items():
+                                fp_df.loc[idx, '指定批次/来源'] = plan_obj
                                 
-                                # --- Save to CSV Record ---
                                 if oid_now:
                                     try:
                                         model_name = fp_df.loc[idx, '机型']
-                                        val_to_save = plan_str
-                                        if ":" in plan_str:
-                                            _, val_to_save = plan_str.split(":", 1)
-                                        save_planning_record(oid_now, model_name, val_to_save)
+                                        save_planning_record(oid_now, model_name, to_json_text(plan_obj))
                                     except Exception as e:
                                         print(f"Error saving to CSV: {e}")
 
@@ -664,12 +651,15 @@ def render_boss_planning():
                             save_factory_plan(fp_df)
                             
                             if oid_now:
-                                all_plans = []
-                                for idx, plan_str in changes_map.items():
-                                    all_plans.append(plan_str)
-                                combined_plan_str = "; ".join(all_plans)
+                                all_plans = {}
+                                contract_rows = fp_df[fp_df['合同号'] == sel_id]
+                                for _, r_plan in contract_rows.iterrows():
+                                    model_name = str(r_plan.get('机型', '')).strip()
+                                    alloc_data = parse_alloc_dict(r_plan.get('指定批次/来源', {}))
+                                    if model_name and alloc_data:
+                                        all_plans[model_name] = alloc_data
                                 if oid_now in orders_df['订单号'].values:
-                                    orders_df.loc[orders_df['订单号'] == oid_now, '指定批次/来源'] = combined_plan_str
+                                    orders_df.loc[orders_df['订单号'] == oid_now, '指定批次/来源'] = [all_plans]
                                     save_orders(orders_df)
                                     st.success(f"已同步更新销售订单 {oid_now}！")
                                 else:
@@ -682,18 +672,19 @@ def render_boss_planning():
                         if status_now == '已规划' and not oid_now:
                             if st.button("🚀 直通配货 (自动生成销售订单)", help="跳过销售确认，直接生成订单并进入配货"):
                                 model_data = {}
-                                all_plans = []
+                                all_plans = {}
                                 note_combined = ""
                                 for idx, row in target_rows.iterrows():
                                     m = row['机型']; q = int(float(row['排产数量']))
                                     model_data[m] = q
                                     if row.get('备注'): note_combined += f" {m}:{row['备注']}"
-                                    all_plans.append(str(row.get('指定批次/来源', '')))
-                                combined_plan_str = "; ".join(all_plans)
+                                    alloc_data = parse_alloc_dict(row.get('指定批次/来源', {}))
+                                    if alloc_data:
+                                        all_plans[m] = alloc_data
                                 new_oid = create_sales_order(
                                     customer=first_row['客户名'], agent=first_row['代理商'], model_data=model_data,
                                     note=note_combined, pack_option="未指定", delivery_time=first_row['要求交期'],
-                                    source_batch=combined_plan_str
+                                    source_batch=all_plans
                                 )
                                 fp_df.loc[fp_df['合同号'] == sel_id, '订单号'] = new_oid
                                 fp_df.loc[fp_df['合同号'] == sel_id, '状态'] = '已转订单'
@@ -721,20 +712,9 @@ def render_boss_planning():
                         reqs = parse_requirements(row['需求机型'], row['需求数量'])
                         
                         # 解析已有的 source plan
-                        existing_plan_str = str(row.get('指定批次/来源', ''))
-                        existing_plan_map = {} # {Model: {Batch: Qty}}
-                        if existing_plan_str:
-                            try:
-                                parts = existing_plan_str.split(";")
-                                for p in parts:
-                                    if ":" in p:
-                                        m, content = p.split(":", 1)
-                                        m = m.strip()
-                                        try: existing_plan_map[m] = ast.literal_eval(content.strip())
-                                        except: pass
-                            except: pass
+                        existing_plan_map = parse_plan_map(row.get('指定批次/来源', {}))
 
-                        new_plans = []
+                        new_plans = {}
                         
                         for model_key, qty in reqs.items():
                             # --- V7.1 核心解析逻辑 ---
@@ -787,16 +767,13 @@ def render_boss_planning():
                                     
                                     # 2. 重新构建整个订单的 plan string
                                     # Manual Order 的格式是 "ModelA:{...}; ModelB:{...}"
-                                    all_plans_sync = []
-                                    # 注意：reqs 是 {model: qty}，我们遍历 reqs 来重组字符串，确保覆盖所有机型
+                                    all_plans_sync = {}
                                     for m_key in reqs.keys():
                                         alloc_data = existing_plan_map.get(m_key, {})
                                         if alloc_data:
-                                            all_plans_sync.append(f"{m_key}:{str(alloc_data)}")
+                                            all_plans_sync[m_key] = alloc_data
                                     
-                                    combined_plan_sync = "; ".join(all_plans_sync)
-                                    
-                                    orders_df.loc[orders_df['订单号'] == sel_id, '指定批次/来源'] = combined_plan_sync
+                                    orders_df.loc[orders_df['订单号'] == sel_id, '指定批次/来源'] = [all_plans_sync]
                                     save_orders(orders_df)
                                     st.success("已同步实际配货数据！"); time.sleep(0.5); st.rerun()
                             else:
@@ -871,20 +848,16 @@ def render_boss_planning():
                             this_plan = {}
                             if alloc_spot > 0: this_plan['现货(Spot)'] = alloc_spot
                             this_plan.update(current_batch_alloc)
-                            new_plans.append(f"{model_key}:{str(this_plan)}")
+                            new_plans[model_key] = this_plan
                             st.divider()
                             
                         if st.button("💾 保存订单规划", type="primary"):
-                            final_plan_str = "; ".join(new_plans)
-                            orders_df.loc[orders_df['订单号'] == sel_id, '指定批次/来源'] = final_plan_str
+                            orders_df.loc[orders_df['订单号'] == sel_id, '指定批次/来源'] = [new_plans]
                             save_orders(orders_df)
 
-                            # --- Save to CSV ---
                             try:
-                                for p in new_plans:
-                                    if ":" in p:
-                                        m, c = p.split(":", 1)
-                                        save_planning_record(sel_id, m, c)
+                                for m, c in new_plans.items():
+                                    save_planning_record(sel_id, m, to_json_text(c))
                             except Exception as e:
                                 print(f"Error saving manual plan to CSV: {e}")
 

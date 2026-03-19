@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import tempfile
 from datetime import datetime
@@ -6,6 +7,83 @@ from datetime import datetime
 import pandas as pd
 from config import MACHINE_ARCHIVE_ABS_DIR, OPENPYXL_AVAILABLE, openpyxl
 from crud.inventory import append_import_staging, get_data, get_import_staging, save_data, save_import_staging
+
+
+def _to_int_qty(value):
+    try:
+        return int(float(value))
+    except Exception:
+        return 0
+
+
+def parse_alloc_dict(value):
+    if isinstance(value, dict):
+        return {str(k): _to_int_qty(v) for k, v in value.items() if _to_int_qty(v) > 0}
+    if value is None:
+        return {}
+    raw = str(value).strip()
+    if not raw:
+        return {}
+    payload = raw
+    if ":" in raw and not raw.startswith("{"):
+        payload = raw.split(":", 1)[1].strip()
+    for candidate in (payload, payload.replace("'", '"')):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return {str(k): _to_int_qty(v) for k, v in parsed.items() if _to_int_qty(v) > 0}
+        except Exception:
+            continue
+    return {}
+
+
+def parse_plan_map(value):
+    if isinstance(value, dict):
+        normalized = {}
+        for k, v in value.items():
+            alloc = parse_alloc_dict(v)
+            if alloc:
+                normalized[str(k)] = alloc
+        return normalized
+    if value is None:
+        return {}
+    raw = str(value).strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            normalized = {}
+            for k, v in parsed.items():
+                alloc = parse_alloc_dict(v)
+                if alloc:
+                    normalized[str(k)] = alloc
+            return normalized
+    except Exception:
+        pass
+    merged = {}
+    for part in raw.split(";"):
+        if ":" not in part:
+            continue
+        model, content = part.split(":", 1)
+        model = model.strip()
+        alloc = parse_alloc_dict(content.strip())
+        if not model or not alloc:
+            continue
+        if model not in merged:
+            merged[model] = {}
+        for batch, qty in alloc.items():
+            merged[model][batch] = merged[model].get(batch, 0) + _to_int_qty(qty)
+    return merged
+
+
+def to_json_text(data):
+    if data is None:
+        return "{}"
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except Exception:
+        return "{}"
 
 def parse_requirements(model_str, total_qty_str):
     reqs = {}
@@ -314,4 +392,3 @@ def execute_import_transaction_payload(payload, retry_times=1):
 
 def should_reset_page_selection(prev_page, current_page):
     return prev_page != current_page
-

@@ -7,7 +7,7 @@ from database import get_engine
 
 
 def append_log(action, sn_list, operator=None):
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = datetime.now()
     operator = operator or "Unknown"
     new_logs = [{"时间": current_time, "操作类型": action, "流水号": sn, "操作员": operator} for sn in sn_list]
     if new_logs:

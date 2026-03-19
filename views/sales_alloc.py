@@ -9,7 +9,7 @@ from core.permissions import check_access
 from crud.inventory import get_data
 from crud.orders import allocate_inventory, get_orders, revert_to_inbound
 from crud.planning import get_planning_records
-from utils.parsers import parse_requirements
+from utils.parsers import parse_alloc_dict, parse_plan_map, parse_requirements
 
 
 def render_sales_alloc():
@@ -46,18 +46,19 @@ def render_sales_alloc():
             
             # --- 显示老板的规划指示 ---
             # V7.2: 优先从 CSV 读取规划记录，解决覆盖更新问题
-            source_plan = ""
+            source_plan = {}
             try:
                 plan_records = get_planning_records()
                 order_plans = plan_records[plan_records['order_id'] == oid]
                 
                 if not order_plans.empty:
-                    combined_plans = []
+                    combined_plans = {}
                     for _, pr in order_plans.iterrows():
-                        p_info = str(pr['plan_info'])
                         p_model = str(pr['model'])
-                        combined_plans.append(f"{p_model}:{p_info}")
-                    source_plan = "; ".join(combined_plans)
+                        p_info = parse_alloc_dict(pr.get('plan_info', {}))
+                        if p_model and p_info:
+                            combined_plans[p_model] = p_info
+                    source_plan = combined_plans
                 else:
                     source_plan = row.get('指定批次/来源', '')
             except Exception as e:
@@ -67,30 +68,18 @@ def render_sales_alloc():
             plan_html = ""
             has_valid_plan = False
             
-            if source_plan:
-                # 智能过滤：去除空指示 (例如 "Model: {}")
-                raw_items = str(source_plan).split(";")
+            source_plan_map = parse_plan_map(source_plan)
+            if source_plan_map:
                 valid_items = []
-                for item in raw_items:
-                    s_item = item.strip()
-                    if not s_item: continue
-                    
-                    # 检查是否实质为空 (以 {} 或 [] 结尾)
-                    # 去除所有空格后检查
-                    clean_check = s_item.replace(" ", "")
-                    if clean_check.endswith("{}") or clean_check.endswith("[]"):
+                for p_model, alloc_map in source_plan_map.items():
+                    alloc_clean = parse_alloc_dict(alloc_map)
+                    if not alloc_clean:
                         continue
-                    # 简单的 Key: 格式也忽略
-                    if clean_check.endswith(":"):
-                        continue
-                        
-                    valid_items.append(s_item)
-                
+                    alloc_txt = ", ".join([f"{b}:{q}" for b, q in alloc_clean.items()])
+                    valid_items.append(f"{p_model}: {alloc_txt}")
                 if valid_items:
                     has_valid_plan = True
-                    # 重新组合并美化
-                    cleaned_source = "; ".join(valid_items)
-                    display_plan = cleaned_source.replace(";", "<br>").replace("{", " [").replace("}", "] ").replace("'", "")
+                    display_plan = "<br>".join(valid_items)
                     plan_html = f"<div style='background:#FFF8DC; color:#8B4500; padding:5px; border-radius:4px; font-size:14px;'><b>👑 老板指示:</b><br>{display_plan}</div>"
             
             # 筛选逻辑

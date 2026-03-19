@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from database import get_engine
+from utils.parsers import parse_alloc_dict, to_json_text
 
 
 def get_planning_records():
@@ -47,7 +48,12 @@ def get_factory_plan():
         for col in cols:
             if col not in df.columns:
                 df[col] = ""
-        return df.fillna("").drop(columns=['id'], errors='ignore')
+        if "指定批次/来源" in df.columns:
+            df["指定批次/来源"] = df["指定批次/来源"].apply(parse_alloc_dict)
+        fill_cols = [c for c in cols if c != "指定批次/来源"]
+        for col in fill_cols:
+            df[col] = df[col].fillna("")
+        return df.drop(columns=['id'], errors='ignore')
     except (OperationalError, Exception):
         return pd.DataFrame(columns=cols)
 
@@ -55,10 +61,15 @@ def get_factory_plan():
 def save_factory_plan(df):
     cols = ["合同号", "机型", "排产数量", "要求交期", "状态", "备注", "客户名", "代理商", "指定批次/来源", "订单号"]
     try:
-        df = df.fillna("")
+        df = df.copy()
         for col in cols:
             if col not in df.columns:
                 df[col] = ""
+        df["指定批次/来源"] = df["指定批次/来源"].apply(lambda v: to_json_text(parse_alloc_dict(v)))
+        df["订单号"] = df["订单号"].apply(lambda v: None if str(v).strip() == "" else str(v).strip())
+        for col in [c for c in cols if c != "指定批次/来源"]:
+            if col != "订单号":
+                df[col] = df[col].fillna("")
         with get_engine().begin() as conn:
             conn.execute(text("DELETE FROM factory_plan"))
             if not df.empty:

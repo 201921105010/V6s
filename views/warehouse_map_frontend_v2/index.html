@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+     /* 1. 锁死最外层，防止出现不可控的滚动条 */ 
+     html, body { 
+         margin: 0; 
+         padding: 0; 
+         width: 100%; 
+         height: 100%; 
+         background-color: #F5F5F7; 
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+         overflow: hidden; 
+     } 
+
+     /* 2. 新增一个专门负责滚动的容器 */ 
+     .scroll-wrapper { 
+         width: 100%; 
+         height: 100%; 
+         overflow: auto; /* 核心：允许内部出现滚动条 */ 
+         -webkit-overflow-scrolling: touch; 
+         touch-action: pan-x pan-y; 
+         box-sizing: border-box; 
+     } 
+
+     /* 3. 修改原有的 canvas 容器 */ 
+     .canvas { 
+         position: relative; 
+         /* 移除 width: 100%，让 JS 动态设置的具体宽度(px)能够生效并撑出滚动条 */ 
+         min-height: 800px; 
+         padding-bottom: 20px; /* 为底部的横向滚动条留出一点呼吸空间 */ 
+         transform-origin: top left;
+         transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), margin 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+     } 
+
+     /* Floating Controls */
+     .floating-controls {
+         position: fixed;
+         bottom: 40px;
+         right: 40px;
+         z-index: 1000;
+         display: flex;
+         flex-direction: column;
+         gap: 10px;
+     }
+     
+     .btn-scale {
+         background: rgba(30, 30, 30, 0.6);
+         backdrop-filter: blur(12px);
+         -webkit-backdrop-filter: blur(12px);
+         border: 1px solid rgba(255, 255, 255, 0.1);
+         border-radius: 40px;
+         padding: 12px 24px;
+         font-size: 15px;
+         font-weight: 500;
+         color: #FFFFFF;
+         cursor: pointer;
+         box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+         display: flex;
+         align-items: center;
+         gap: 8px;
+         transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+     }
+     .btn-scale:hover {
+         transform: translateY(-2px);
+         box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+         background: rgba(50, 50, 50, 0.8);
+         border-color: rgba(255, 255, 255, 0.2);
+     }
+     .btn-scale:active {
+         transform: translateY(1px);
+     }
+     .btn-scale.active {
+         background: rgba(0, 122, 255, 0.8);
+         border-color: rgba(0, 122, 255, 0.5);
+     }
+     
+     body.high-contrast .btn-scale {
+         background: rgba(40, 40, 40, 0.85);
+         color: #FFFFFF;
+         border-color: rgba(255,255,255,0.1);
+     }
+     body.high-contrast .btn-scale:hover {
+         background: rgba(60, 60, 60, 0.95);
+     }
+     body.high-contrast .btn-scale.active {
+         background: rgba(10, 132, 255, 0.8);
+         border-color: rgba(10, 132, 255, 0.5);
+     }
+     .card {
+         position: absolute;
+         border-radius: 16px;
+         background-color: #FFFFFF;
+         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+         padding: 12px;
+         box-sizing: border-box;
+         display: flex;
+         flex-direction: column;
+         cursor: pointer;
+         transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+         border: 2px solid transparent;
+     }
+     .card:hover {
+         transform: translateY(-2px);
+         box-shadow: 0 8px 12px rgba(0,0,0,0.1);
+     }
+     
+     /* 空闲状态 - 降低视觉噪音 */
+     .card.status-空闲 { background-color: #FAFAFA; border-color: #E5E5EA; }
+     .card.status-空闲:hover { border-color: #34C759; } /* Hover时才点亮 */
+     
+     .card.status-占用 { background-color: #F2F2F7; border-color: #007AFF; }
+     .card.status-满载 { background-color: #FFEBEE; border-color: #FF3B30; }
+     .card.status-锁定异常 { background-color: #E5E5EA; border-color: #8E8E93; }
+
+     .card-header {
+         display: flex;
+         justify-content: space-between;
+         align-items: center;
+         margin-bottom: 8px;
+         padding-bottom: 6px;
+         border-bottom: 1px solid rgba(0,0,0,0.05);
+     }
+     .card-title {
+         font-size: 16px;
+         font-weight: 600;
+         color: #1D1D1F;
+     }
+     .card-count {
+         font-size: 12px;
+         color: #8E8E93;
+     }
+
+     /* 5-grid layout */
+     .grids {
+         display: grid;
+         grid-template-rows: repeat(5, 1fr);
+         gap: 8px;
+         flex-grow: 1;
+         height: 100%;
+         overflow: hidden; /* 防止网格区域溢出 */
+     }
+     .grid-item {
+         background-color: rgba(255,255,255,0.8);
+         border-radius: 8px;
+         padding: 8px 12px;
+         display: flex;
+         justify-content: center;
+         align-items: center;
+         font-size: 14px;
+         color: #3A3A3C;
+         border: 1px solid rgba(0,0,0,0.05);
+         white-space: nowrap; /* 强制单行显示 */
+         overflow: hidden; /* 溢出隐藏 */
+         text-overflow: ellipsis; /* 溢出部分显示省略号 */
+     }
+     .grid-item-sn {
+         font-weight: 600;
+         color: #007AFF;
+         font-size: 16px;
+         letter-spacing: 0.5px;
+         white-space: nowrap;
+         overflow: hidden;
+         text-overflow: ellipsis;
+         width: 100%; /* 确保能触发 text-overflow */
+         text-align: center;
+     }
+     
+     .grid-empty {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+         height: 100%;
+         color: #8E8E93;
+         font-size: 14px;
+     }
+
+     body.high-contrast {
+         background-color: #111111;
+     }
+     
+     /* Fullscreen Scale Wrapper */
+     /* Transition moved to .canvas globally */
+
+     body.high-contrast .card {
+         background-color: #222222;
+         box-shadow: 0 4px 12px rgba(255,255,255,0.05);
+     }
+     body.high-contrast .card-title { color: #FFFFFF; }
+     body.high-contrast .card-count { color: #AAAAAA; }
+     
+     body.high-contrast .card.status-空闲 { background-color: #1A1A1A; border-color: #333333; }
+     body.high-contrast .card.status-空闲:hover { border-color: #32D74B; }
+     
+     body.high-contrast .card.status-占用 { background-color: #1A2A3A; border-color: #0A84FF; }
+     body.high-contrast .card.status-满载 { background-color: #3A1A1A; border-color: #FF453A; }
+     body.high-contrast .card.status-锁定异常 { background-color: #2A2A2A; border-color: #98989D; }
+
+     body.high-contrast .card-header {
+         border-bottom-color: rgba(255,255,255,0.1);
+     }
+
+     body.high-contrast .grid-item {
+         background-color: rgba(255,255,255,0.05);
+         color: #E5E5EA;
+         border: 1px solid rgba(255,255,255,0.08);
+     }
+     body.high-contrast .grid-item-sn { color: #5AC8FA !important; }
+     body.high-contrast .grid-empty { color: #666666; }
+
+     /* Responsive Media Queries */
+     @media (min-width: 1920px) {
+         .grid-item { font-size: 12px; line-height: 1.4; padding: 8px 10px; }
+     }
+     @media (min-width: 2560px) {
+         .grid-item { font-size: 14px; line-height: 1.5; padding: 10px 12px; }
+     }
+     @media (min-width: 3840px) {
+         .grid-item { font-size: 16px; line-height: 1.6; padding: 12px 14px; }
+     }
+  </style>
+</head>
+<body>
+  <div class="scroll-wrapper">
+      <div id="root" class="canvas"></div>
+  </div>
+  <div class="floating-controls">
+      <button id="btn-autoscale" class="btn-scale" title="智能适应屏幕尺寸">
+          <span class="icon">🔍</span> 
+          <span class="text">适应缩放</span>
+      </button>
+  </div>
+  <script>
+    function sendMessageToStreamlit(type, data) {
+        window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: type,
+            ...data
+        }, "*");
+    }
+    
+    function setComponentValue(value) {
+        sendMessageToStreamlit("streamlit:setComponentValue", {value: value});
+    }
+    
+    function setFrameHeight(height) {
+        sendMessageToStreamlit("streamlit:setFrameHeight", {height: height});
+    }
+
+    let isInitialized = false;
+    let lastSlotsData = "";
+    let currentMaxX = 0;
+    let currentMaxY = 0;
+    
+    let isAutoScale = false;
+    let wasFullscreen = false;
+
+    window.parent.document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape") {
+            sendMessageToStreamlit("streamlit:setComponentValue", {value: "EXIT_FULLSCREEN"});
+        }
+    });
+
+    function updateScaleButtonUI() {
+        const btn = document.getElementById("btn-autoscale");
+        if (!btn) return;
+        btn.classList.toggle("active", isAutoScale);
+        const iconSpan = btn.querySelector('.icon');
+        const textSpan = btn.querySelector('.text');
+        if (isAutoScale) {
+            iconSpan.textContent = "还原";
+            textSpan.textContent = "实际比例";
+        } else {
+            iconSpan.textContent = "🔍";
+            textSpan.textContent = "适应缩放";
+        }
+    }
+
+    document.getElementById("btn-autoscale").addEventListener("click", function() {
+        isAutoScale = !isAutoScale;
+        updateScaleButtonUI();
+        applyLayout();
+    });
+
+    function applyLayout() {
+         const root = document.getElementById("root");
+         if (!root) return;
+         
+         if (isAutoScale) {
+             const screenWidth = window.innerWidth;
+             const screenHeight = window.innerHeight; // 使用内部高度（已受 iframe 100vh 控制）
+             
+             // 保留适度边距，避免贴边
+             const requiredWidth = currentMaxX + 50;
+             const requiredHeight = currentMaxY + 100;
+             
+             let scaleX = 1;
+             let scaleY = 1;
+             
+             if (requiredWidth > 0) {
+                 scaleX = screenWidth / requiredWidth;
+             }
+             if (requiredHeight > 0) {
+                 scaleY = screenHeight / requiredHeight;
+             }
+             
+             let scale = Math.min(scaleX, scaleY);
+             scale = scale * 0.95; // 5% 边距安全区
+             
+             root.style.transform = `scale(${scale})`;
+             root.style.width = requiredWidth + "px";
+             root.style.height = requiredHeight + "px"; // 显式设定高度
+             
+             // 完美居中逻辑
+             const scaledWidth = requiredWidth * scale;
+             const scaledHeight = requiredHeight * scale;
+             
+             let marginLeft = 0;
+             let marginTop = 0;
+             
+             if (scaledWidth < screenWidth) {
+                 marginLeft = (screenWidth - scaledWidth) / 2;
+             }
+             // 对于全屏模式，如果缩放后高度小于屏幕高度，则垂直居中
+             if (scaledHeight < screenHeight) {
+                 marginTop = (screenHeight - scaledHeight) / 2;
+             }
+             
+             root.style.marginLeft = marginLeft + "px";
+             root.style.marginTop = marginTop + "px";
+             
+             // 缩放模式下禁用外部滚动条，避免出现无用的空白
+             document.querySelector('.scroll-wrapper').style.overflow = 'hidden';
+             
+             // 设置 iframe 高度为屏幕高度
+             setFrameHeight(screenHeight);
+         } else {
+             root.style.transform = "scale(1)";
+             root.style.width = Math.max(1000, currentMaxX + 50) + "px";
+             root.style.height = Math.max(800, currentMaxY + 130) + "px";
+             root.style.marginLeft = "0px";
+             root.style.marginTop = "0px";
+             
+             // 还原滚动模式
+             document.querySelector('.scroll-wrapper').style.overflow = 'auto';
+             
+             setFrameHeight(Math.max(800, currentMaxY + 130));
+         }
+     }
+
+    window.addEventListener("message", function(event) {
+        if (event.data.type === "streamlit:render") {
+            if (!isInitialized) {
+                isInitialized = true;
+                sendMessageToStreamlit("streamlit:componentReady", {apiVersion: 1});
+            }
+
+            const args = event.data.args || {};
+            const slots = args.slots || [];
+            const isFullscreen = args.fullscreen || false;
+            
+            if (isFullscreen) {
+                document.body.classList.add("high-contrast");
+            } else {
+                document.body.classList.remove("high-contrast");
+            }
+
+            // Auto-toggle scale based on fullscreen state change
+            if (isFullscreen && !wasFullscreen) {
+                isAutoScale = true;
+                updateScaleButtonUI();
+            } else if (!isFullscreen && wasFullscreen) {
+                isAutoScale = false;
+                updateScaleButtonUI();
+            }
+            wasFullscreen = isFullscreen;
+
+            const slotsJson = JSON.stringify(slots);
+            
+            if (slotsJson !== lastSlotsData) {
+                lastSlotsData = slotsJson;
+
+                const root = document.getElementById("root");
+                root.innerHTML = "";
+                
+                currentMaxY = 0;
+                currentMaxX = 0;
+
+                slots.forEach(slot => {
+                    const card = document.createElement("div");
+                    card.className = `card status-${slot.status.replace(/\//g, '')}`;
+                    card.style.left = `${slot.x}px`;
+                    card.style.top = `${slot.y}px`;
+                    card.style.width = `${slot.w}px`;
+                    card.style.height = `${slot.h}px`;
+                    
+                    card.onclick = () => setComponentValue(slot.code);
+
+                    if (slot.y + slot.h > currentMaxY) {
+                        currentMaxY = slot.y + slot.h;
+                    }
+                    if (slot.x + slot.w > currentMaxX) {
+                        currentMaxX = slot.x + slot.w;
+                    }
+
+                    let innerHTML = `
+                        <div class="card-header">
+                            <span class="card-title">${slot.code}</span>
+                            <span class="card-count">${slot.count}/${slot.max_capacity}</span>
+                        </div>
+                    `;
+
+                    if (slot.machines && slot.machines.length > 0) {
+                        innerHTML += `<div class="grids">`;
+                        slot.machines.slice(0, 5).forEach(m => {
+                            innerHTML += `
+                                <div class="grid-item">
+                                    <span class="grid-item-sn">${m.sn}</span>
+                                </div>
+                            `;
+                        });
+                        innerHTML += `</div>`;
+                    } else {
+                        let statusText = slot.status === '空闲' ? '空闲' : slot.status;
+                        if (statusText === '绌洪棽' || statusText.includes('绌')) {
+                            statusText = '空闲';
+                        }
+                        innerHTML += `<div class="grid-empty">${statusText}</div>`;
+                    }
+
+                    card.innerHTML = innerHTML;
+                    root.appendChild(card);
+                });
+            }
+
+            applyLayout();
+        }
+    });
+
+    sendMessageToStreamlit("streamlit:componentReady", {apiVersion: 1});
+    setFrameHeight(800);
+  </script>
+</body>
+</html>

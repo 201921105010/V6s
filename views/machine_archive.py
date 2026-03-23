@@ -6,6 +6,7 @@ from datetime import datetime
 import streamlit as st
 
 from config import MACHINE_ARCHIVE_ABS_DIR
+from core.file_manager import audit_log
 from core.navigation import go_home
 from core.permissions import check_access
 from crud.inventory import get_data

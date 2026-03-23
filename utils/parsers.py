@@ -6,7 +6,14 @@ from datetime import datetime
 
 import pandas as pd
 from config import MACHINE_ARCHIVE_ABS_DIR, OPENPYXL_AVAILABLE, openpyxl
-from crud.inventory import append_import_staging, get_data, get_import_staging, save_data, save_import_staging
+from crud.inventory import (
+    append_import_staging,
+    append_import_staging_transactional,
+    get_data,
+    get_import_staging,
+    save_data,
+    save_import_staging,
+)
 
 
 def _to_int_qty(value):
@@ -182,8 +189,10 @@ def generate_auto_inbound(batch_input, model_input, qty_input, expected_inbound_
         
     if new_records:
         df_new = pd.DataFrame(new_records)
-        append_import_staging(df_new)
-        return 1, f"已生成 {qty_input} 条数据 ({new_records[0]['流水号']} ~ {new_records[-1]['流水号']})"
+        result = append_import_staging_transactional(df_new)
+        if not result.get("ok"):
+            return -2, f"{result.get('error_code', 'E_IMPORT_TXN_ROLLBACK')}: {result.get('message', '写入失败')}"
+        return 1, f"已生成 {result.get('inserted', qty_input)} 条数据 ({new_records[0]['流水号']} ~ {new_records[-1]['流水号']})"
     else: return 0, "生成失败"
 
 def parse_tracking_xls(uploaded_file) -> tuple[int, str, "pd.DataFrame"]: 

@@ -6,9 +6,11 @@ import streamlit as st
 
 from core.navigation import go_home
 from core.permissions import check_access
-from crud.inventory import get_data, save_data
+from crud.inventory import get_data, save_data, archive_shipped_data
 from crud.orders import get_orders, revert_to_inbound
+from crud.logs import append_log
 from utils.formatters import get_model_rank
+from views.components import render_archive_preview, render_module_logs
 
 
 def render_ship_confirm():

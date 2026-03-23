@@ -1,0 +1,1 @@
+import{_ as n}from"./_plugin-vue_export-helper-DlAUqK2U.js";import{o,c as a,a as s}from"./index-CTke06wk.js";const t={},r={class:"boss-planning"};function c(l,e){return o(),a("div",r,[...e[0]||(e[0]=[s("h2",null,"生产统筹",-1),s("p",null,"该模块正在从 Streamlit 迁移至 Vue 3...",-1)])])}const d=n(t,[["render",c],["__scopeId","data-v-8aac9f30"]]);export{d as default};

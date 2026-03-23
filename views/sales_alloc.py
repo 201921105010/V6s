@@ -10,6 +10,7 @@ from crud.inventory import get_data
 from crud.orders import allocate_inventory, get_orders, revert_to_inbound
 from crud.planning import get_planning_records
 from utils.parsers import parse_alloc_dict, parse_plan_map, parse_requirements
+from views.components import render_module_logs
 
 
 def render_sales_alloc():

@@ -13,6 +13,7 @@ from crud.orders import create_sales_order, get_orders, save_orders
 from crud.planning import get_factory_plan, save_factory_plan, save_planning_record
 from utils.formatters import get_model_rank
 from utils.parsers import parse_alloc_dict, parse_plan_map, parse_requirements, to_json_text
+from views.components import render_file_manager
 
 
 def render_boss_planning():
@@ -532,7 +533,7 @@ def render_boss_planning():
                                         else: new_alloc[b] = c
                                     
                                     # 1. 更新当前行的 '指定批次/来源'
-                                    fp_df.loc[idx, '指定批次/来源'] = new_alloc
+                                    fp_df.at[idx, '指定批次/来源'] = to_json_text(new_alloc)
                                     save_factory_plan(fp_df)
                                     
                                     # 2. 如果关联了订单，同步更新 Sales Order
@@ -636,7 +637,7 @@ def render_boss_planning():
 
                         if st.button("💾 保存规划 (Save Plan)", type="primary"):
                             for idx, plan_obj in changes_map.items():
-                                fp_df.loc[idx, '指定批次/来源'] = plan_obj
+                                fp_df.at[idx, '指定批次/来源'] = to_json_text(plan_obj)
                                 
                                 if oid_now:
                                     try:

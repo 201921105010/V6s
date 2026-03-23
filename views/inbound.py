@@ -1,5 +1,6 @@
 import time
 from datetime import datetime
+import json
 
 import streamlit as st
 
@@ -56,11 +57,29 @@ def render_inbound():
             inp_note = st.text_area("机台备注", key="auto_note")
             
             confirm_gen = st.checkbox("我确认上述信息无误", key="auto_confirm")
+            request_signature = json.dumps(
+                {
+                    "batch": str(inp_batch or "").strip(),
+                    "model": str(final_model or "").strip(),
+                    "qty": int(inp_qty),
+                    "date": str(inp_date),
+                    "note": str(inp_note or "").strip(),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             if st.button("✅ 生成并保存到 PLAN_IMPORT", type="primary", disabled=not confirm_gen, key="auto_btn"):
+                last_failed_signature = st.session_state.get("auto_last_failed_signature", "")
+                if last_failed_signature == request_signature:
+                    st.error("E_DUPLICATE_SUBMIT: 上一次相同请求已失败，请修改参数后重试")
+                    return
                 code, msg = generate_auto_inbound(inp_batch, final_model, inp_qty, inp_date, inp_note)
                 if code == 1:
+                    st.session_state["auto_last_failed_signature"] = ""
                     st.success(msg)
                     time.sleep(1); st.rerun()
-                else: st.error(msg)
+                else:
+                    st.session_state["auto_last_failed_signature"] = request_signature
+                    st.error(msg)
 
     # --- 🔍 查询 (保持原版逻辑) ---

@@ -7,8 +7,8 @@ os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 MYSQL_HOST = os.environ.get("MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.environ.get("MYSQL_PORT", "3306"))
 MYSQL_USER = os.environ.get("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "123456")
-MYSQL_DB = os.environ.get("MYSQL_DB", "rjfinshed")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "030705")
+MYSQL_DB = os.environ.get("MYSQL_DB", "rjt3")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "888")
 
 # Paths
@@ -62,9 +62,9 @@ DEFAULT_USERS = {
 }
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "Boss": ["PLANNING", "CONTRACT", "QUERY", "ARCHIVE"],
-    "Sales": ["PLANNING", "CONTRACT", "SALES_CREATE", "SALES_ALLOC", "INBOUND", "QUERY"],
-    "Prod": ["INBOUND", "SHIP_CONFIRM", "QUERY", "MACHINE_EDIT", "ARCHIVE"],
+    "Boss": ["PLANNING", "CONTRACT", "QUERY", "ARCHIVE", "WAREHOUSE_MAP"],
+    "Sales": ["PLANNING", "CONTRACT", "SALES_CREATE", "SALES_ALLOC", "INBOUND", "QUERY", "WAREHOUSE_MAP"],
+    "Prod": ["INBOUND", "SHIP_CONFIRM", "QUERY", "MACHINE_EDIT", "MACHINE_EDIT_MODEL", "ARCHIVE", "WAREHOUSE_MAP"],
 }
 
 PRESET_RATIOS = {
@@ -98,6 +98,7 @@ FUNC_MAP = {
     "SALES_ALLOC": {"label": "📦 订单配货", "page": "sales_alloc", "class": "sales-alloc-btn"},
     "SHIP_CONFIRM": {"label": "🚛 发货复核", "page": "ship_confirm", "class": "ship-btn"},
     "MACHINE_EDIT": {"label": "🛠️ 机台编辑", "page": "machine_edit", "class": "machine-edit-btn"},
+    "WAREHOUSE_MAP": {"label": "🗺️ 库位大屏", "page": "warehouse_dashboard", "class": "inbound-btn"},
 }
 
 GLOBAL_CSS = """

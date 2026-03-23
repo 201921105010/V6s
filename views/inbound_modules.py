@@ -4,11 +4,35 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from config import MACHINE_ARCHIVE_ABS_DIR
-from crud.inventory import append_import_staging, get_data, get_import_staging, save_data, save_import_staging
+from crud.inventory import (
+    WAREHOUSE_MAX_CAPACITY,
+    append_import_staging,
+    get_data,
+    get_import_staging,
+    get_warehouse_layout,
+    inbound_to_slot,
+    reset_warehouse_layout,
+    save_data,
+    save_import_staging,
+    save_warehouse_layout,
+)
 from crud.logs import append_log
 from utils.formatters import get_model_rank
 from utils.parsers import build_import_payload, diff_tracking_vs_inventory, execute_import_transaction_payload, parse_tracking_xls, should_reset_page_selection
+
+
+def _on_plan_import_checkbox_change(sn, widget_key):
+    now_ts = time.time()
+    last_ts = float(st.session_state.get("plan_import_last_toggle_ts", 0.0))
+    if now_ts - last_ts < 0.3:
+        st.session_state[widget_key] = st.session_state.get("plan_import_selected_map", {}).get(sn, False)
+        return
+    selected_map = st.session_state.get("plan_import_selected_map", {})
+    selected_map[str(sn)] = bool(st.session_state.get(widget_key, False))
+    st.session_state["plan_import_selected_map"] = selected_map
+    st.session_state["plan_import_last_toggle_ts"] = now_ts
+    st.session_state["plan_import_select_event_count"] = int(st.session_state.get("plan_import_select_event_count", 0)) + 1
+
 
 def check_prod_admin_permission():
     if st.session_state.role not in ['Admin', 'Prod']:
@@ -105,6 +129,42 @@ def render_tracking_import_module():
         start = page_idx * page_size
         end = start + page_size
         page_df = work_df.iloc[start:end].copy()
+        editable_cols = ["流水号", "批次号", "机型", "状态", "预计入库时间", "机台备注/配置"]
+        editor_df = page_df[editable_cols].copy()
+        editor_df.insert(0, "原流水号", page_df["流水号"].astype(str).tolist())
+        edited_page_df = st.data_editor(
+            editor_df,
+            hide_index=True,
+            use_container_width=True,
+            key=f"plan_import_editor_{page_idx}",
+            disabled=["原流水号"],
+        )
+        save_col1, save_col2 = st.columns([1.5, 5.5])
+        with save_col1:
+            if st.button("💾 保存本页编辑", key=f"plan_import_save_page_{page_idx}"):
+                edited_apply_df = edited_page_df.copy()
+                edited_apply_df["原流水号"] = edited_apply_df["原流水号"].astype(str).str.strip()
+                edited_apply_df["流水号"] = edited_apply_df["流水号"].astype(str).str.strip()
+                if (edited_apply_df["流水号"] == "").any():
+                    st.error("流水号不能为空")
+                    st.stop()
+                full_df = plan_df.copy()
+                full_df["流水号"] = full_df["流水号"].astype(str).str.strip()
+                source_sns = edited_apply_df["原流水号"].tolist()
+                remaining_df = full_df[~full_df["流水号"].isin(source_sns)].copy()
+                updated_rows_df = edited_apply_df.drop(columns=["原流水号"])
+                merged_df = pd.concat([remaining_df, updated_rows_df], ignore_index=True)
+                duplicated_sns = merged_df["流水号"][merged_df["流水号"].duplicated()].astype(str).tolist()
+                if duplicated_sns:
+                    st.error(f"保存失败，存在重复流水号: {duplicated_sns[:5]}")
+                    st.stop()
+                save_import_staging(merged_df)
+                st.session_state["plan_import_selected_map"] = {}
+                st.success("已保存本页编辑")
+                time.sleep(0.5)
+                st.rerun()
+        page_df = edited_page_df.drop(columns=["原流水号"]).copy()
+        page_df["流水号"] = page_df["流水号"].astype(str).str.strip()
 
         if should_reset_page_selection(st.session_state.get("plan_import_prev_page"), page_idx):
             st.session_state["plan_import_selected_map"] = {}
@@ -129,33 +189,33 @@ def render_tracking_import_module():
                 selected_map = {sn: select_all for sn in page_sns}
                 st.session_state["plan_import_selected_map"] = selected_map
 
-        editor_df = page_df.copy()
-        editor_df.insert(0, "选择", [selected_map.get(sn, False) for sn in page_sns])
-        edited_plan = st.data_editor(
-            editor_df,
-            num_rows="fixed",
-            hide_index=True,
-            use_container_width=True,
-            key=f"plan_import_editor_{page_idx}",
-            column_config={
-                "选择": st.column_config.CheckboxColumn("选择", width="small"),
-                "批次号": st.column_config.TextColumn("批次号"),
-                "机型": st.column_config.TextColumn("机型"),
-                "流水号": st.column_config.TextColumn("流水号"),
-                "预计入库时间": st.column_config.TextColumn("预计入库时间"),
-                "机台备注/配置": st.column_config.TextColumn("机台备注/配置", width="large"),
-            }
-        )
+        header_cols = st.columns([0.8, 2, 2, 2, 2.5, 3])
+        header_cols[0].markdown("**选择**")
+        header_cols[1].markdown("**流水号**")
+        header_cols[2].markdown("**批次号**")
+        header_cols[3].markdown("**机型**")
+        header_cols[4].markdown("**预计入库时间**")
+        header_cols[5].markdown("**机台备注/配置**")
+        for _, row in page_df.iterrows():
+            sn = str(row["流水号"]).strip()
+            row_cols = st.columns([0.8, 2, 2, 2, 2.5, 3])
+            checkbox_key = f"plan_import_row_cb_{page_idx}_{sn}"
+            st.session_state[checkbox_key] = bool(st.session_state.get("plan_import_selected_map", {}).get(sn, False))
+            row_cols[0].checkbox(
+                " ",
+                key=checkbox_key,
+                on_change=_on_plan_import_checkbox_change,
+                args=(sn, checkbox_key),
+            )
+            row_cols[1].text(sn)
+            row_cols[2].text(str(row.get("批次号", "")))
+            row_cols[3].text(str(row.get("机型", "")))
+            row_cols[4].text(str(row.get("预计入库时间", "")))
+            row_cols[5].text(str(row.get("机台备注/配置", "")))
 
-        if "选择" in edited_plan.columns:
-            current_map = {}
-            for _, row in edited_plan.iterrows():
-                current_map[str(row["流水号"]).strip()] = bool(row["选择"])
-            st.session_state["plan_import_selected_map"] = current_map
-            selected_map = current_map
-        
-        selected_rows = edited_plan[edited_plan["选择"] == True].copy() if "选择" in edited_plan.columns else pd.DataFrame()
-        payload_date_col, confirm_btn_col, save_btn_col, msg_col = st.columns([2, 1.5, 1.5, 3])
+        selected_map = st.session_state.get("plan_import_selected_map", {})
+        selected_rows = page_df[page_df["流水号"].astype(str).isin([sn for sn, selected in selected_map.items() if selected])].copy()
+        payload_date_col, confirm_btn_col, msg_col = st.columns([2, 1.5, 3])
         with payload_date_col:
             selected_date = st.date_input(
                 "预计入库日期",
@@ -191,14 +251,38 @@ def render_tracking_import_module():
                     time.sleep(0.5)
                     st.rerun()
 
-        col_btns = [save_btn_col]
-        with col_btns[0]:
-             if st.button("💾 保存修改 (仅保存)", help="将上述修改保存到待入库清单"):
-                 try:
-                     save_import_staging(edited_plan.drop(columns=["选择"], errors="ignore"))
-                     st.success("已保存修改")
-                 except Exception as e:
-                     st.error(f"保存失败: {e}")
+@st.dialog("确认入库")
+def confirm_inbound_dialog(sns, target_code):
+    st.warning(f"确定要将以下 {len(sns)} 台机台入库到库位 **{target_code}** 吗？")
+    st.write(sns)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ 确认", type="primary", use_container_width=True):
+            success_count = 0
+            errors = []
+            
+            # Use individual inbound_to_slot to properly handle concurrency/capacity
+            for sn in sns:
+                result = inbound_to_slot(sn, target_code)
+                if result.get("ok"):
+                    success_count += 1
+                    append_log("扫描入库", [sn])
+                else:
+                    errors.append(f"{sn}: {result.get('message')}")
+            
+            if success_count > 0:
+                st.success(f"成功将 {success_count} 台机台入库到 {target_code}！")
+            if errors:
+                for err in errors:
+                    st.error(err)
+            
+            st.session_state.inbound_dialog_done = True
+            st.rerun()
+            
+    with col2:
+        if st.button("❌ 取消", use_container_width=True):
+            st.rerun()
 
 def render_machine_inbound_module():
     """
@@ -242,13 +326,80 @@ def render_machine_inbound_module():
         sel = res[res['✅'] == True]
         
         if not sel.empty:
-            if st.button(f"🚀 确认入库 {len(sel)} 台", type="primary", key="btn_confirm_machine_inbound"):
-                # Update status
-                sns = sel['流水号'].tolist()
-                df.loc[df['流水号'].isin(sns), '状态'] = '库存中'
-                df.loc[df['流水号'].isin(sns), '更新时间'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                save_data(df)
-                append_log("扫描入库", sns)
-                st.success("入库成功！"); time.sleep(1); st.rerun()
+            st.markdown("---")
+            with st.expander("🎯 请选择目标库位进行入库 (点击库位按钮确认)", expanded=True):
+                layout_resp = get_warehouse_layout("default")
+                slots = layout_resp.get("layout_json", {}).get("slots", [])
+                
+                if not slots:
+                    st.warning("尚未配置库位，请先到大屏看板配置库位！")
+                else:
+                    inventory_df = df.copy()
+                    if "Location_Code" not in inventory_df.columns:
+                        inventory_df["Location_Code"] = ""
+                    
+                    # 响应式布局：根据屏幕宽度自适应列数，避免移动端显示挤压
+                    cols = st.columns([1, 1, 1, 1, 1, 1]) 
+                    
+                    # Gather all selected models
+                    selected_models = set(sel['机型'].astype(str).str.strip().tolist())
+                    
+                    for idx, s in enumerate(slots):
+                        code = str(s.get("code", "")).strip()
+                        status_cfg = str(s.get("status", "正常")).strip()
+                        allowed_models_str = str(s.get("allowed_models", "")).strip()
+                        
+                        slot_df = inventory_df[inventory_df["Location_Code"].astype(str).str.strip() == code]
+                        active_df = slot_df[slot_df["状态"].astype(str).str.contains("库存中", na=False)]
+                        count = len(active_df)
+                        
+                        btn_disabled = False
+                        display_text = ""
+                        
+                        if status_cfg in ["锁定", "异常"]:
+                            display_text = f"🚫 {code}\n( {status_cfg} )"
+                            btn_disabled = True
+                            btn_type = "secondary"
+                        elif count >= WAREHOUSE_MAX_CAPACITY:
+                            display_text = f"🔴 {code}\n({count}/{WAREHOUSE_MAX_CAPACITY} 满载)"
+                            btn_disabled = True
+                            btn_type = "secondary"
+                        else:
+                            # Check constraint
+                            model_allowed = True
+                            if allowed_models_str:
+                                allowed_list = [m.strip() for m in allowed_models_str.split(",") if m.strip()]
+                                if allowed_list:
+                                    for m in selected_models:
+                                        if m not in allowed_list:
+                                            model_allowed = False
+                                            break
+                            if not model_allowed:
+                                display_text = f"⛔ {code}\n(机型不符)"
+                                btn_disabled = True
+                                btn_type = "secondary"
+                            else:
+                                if count == 0:
+                                    display_text = f"🟩 {code}\n(空闲)"
+                                    btn_type = "primary"
+                                else:
+                                    display_text = f"🟨 {code}\n({count}/{WAREHOUSE_MAX_CAPACITY} 占用)"
+                                    btn_type = "primary"
+                        
+                        col = cols[idx % 6]
+                        if col.button(display_text, key=f"btn_slot_{code}", type=btn_type, disabled=btn_disabled, use_container_width=True):
+                            st.session_state.pending_inbound_sns = sel['流水号'].tolist()
+                            st.session_state.pending_target_code = code
+                            st.session_state.show_inbound_dialog = True
+                            st.rerun()
+
+            if st.session_state.get('show_inbound_dialog', False):
+                sns = st.session_state.get('pending_inbound_sns', [])
+                target_code = st.session_state.get('pending_target_code', '')
+                if sns and target_code:
+                    confirm_inbound_dialog(sns, target_code)
+                if st.session_state.get('inbound_dialog_done', False):
+                    st.session_state.show_inbound_dialog = False
+                    st.session_state.inbound_dialog_done = False
     else:
-        st.info("当前无待入库数据 (或未扫描到对应批次)")
+            st.info("当前无待入库数据 (或未扫描到对应批次)")

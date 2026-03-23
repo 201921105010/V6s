@@ -1,9 +1,13 @@
 import time
+import logging
 
 import streamlit as st
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from crud.users import create_pending_user, get_all_users, user_exists
+from crud.users import create_pending_user, get_user_for_login, normalize_username, user_exists
+
+
+logger = logging.getLogger(__name__)
 
 
 def init_session_state():
@@ -32,18 +36,26 @@ def register_user(username, password, role, name):
 
 
 def verify_login(username, password):
-    df = get_all_users()
-    user = df[df['username'] == username]
+    raw_username = str(username)
+    username_norm = normalize_username(raw_username)
+    logger.info("login_verify_start username_raw='%s' username_norm='%s'", raw_username, username_norm)
+    try:
+        user_row = get_user_for_login(raw_username)
+    except (OperationalError, Exception) as e:
+        logger.exception("login_verify_db_error username_norm='%s'", username_norm)
+        return False, f"系统错误: {e}", None
 
-    if user.empty:
+    if not user_row:
+        logger.warning("login_verify_user_not_found username_norm='%s'", username_norm)
         return False, "用户不存在", None
 
-    user_row = user.iloc[0]
-    if str(user_row['password']) != str(password):
+    if str(user_row.get('password', '')) != str(password):
+        logger.warning("login_verify_password_mismatch username_norm='%s'", username_norm)
         return False, "密码错误", None
 
-    status = str(user_row['status'])
+    status = str(user_row.get('status', '')).strip().lower()
     if status == 'active':
+        logger.info("login_verify_success username_norm='%s' role='%s'", username_norm, user_row.get("role", ""))
         return True, "登录成功", user_row
     if status == 'pending':
         return False, "账户待审核，请联系管理员", None
